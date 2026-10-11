@@ -1,4 +1,4 @@
-"""SQLite-backed local accounts, sessions, and per-user execution history."""
+"""SQLite/PostgreSQL accounts, sessions, and per-user execution history."""
 import hashlib
 import hmac
 import json
@@ -7,8 +7,10 @@ import secrets
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 PASSWORD_ITERATIONS = 310_000
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
@@ -20,21 +22,60 @@ _DUMMY_HASH = hashlib.pbkdf2_hmac(
 
 
 class AuthStore:
-    def __init__(self, database_path: Path):
-        self.database_path = Path(database_path)
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, database_path: Path, database_url=None):
+        self.database_url = database_url
+        self.database_path = Path(database_path) if database_path is not None else None
+        self._postgres = database_url is not None
+        if self._postgres:
+            parsed = urlparse(database_url)
+            if parsed.scheme not in ("postgres", "postgresql"):
+                raise ValueError("DATABASE_URL must use the postgres or postgresql scheme.")
+        else:
+            if self.database_path is None:
+                raise ValueError("A SQLite database path or PostgreSQL URL is required.")
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
+    @contextmanager
     def _connect(self):
-        connection = sqlite3.connect(self.database_path, timeout=10)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 10000")
-        return connection
+        if self._postgres:
+            import pg8000.dbapi
+
+            parsed = urlparse(self.database_url)
+            connection = pg8000.dbapi.connect(
+                user=unquote(parsed.username or ""),
+                password=unquote(parsed.password or ""),
+                host=parsed.hostname,
+                port=parsed.port or 5432,
+                database=unquote(parsed.path.lstrip("/")),
+                ssl_context=True,
+                timeout=10,
+            )
+        else:
+            connection = sqlite3.connect(self.database_path, timeout=10)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 10000")
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _execute(self, connection, query, parameters=()):
+        if self._postgres:
+            query = query.replace("?", "%s")
+            cursor = connection.cursor()
+            cursor.execute(query, parameters)
+            return _MappingCursor(cursor)
+        return connection.execute(query, parameters)
 
     def _initialize(self):
         with self._connect() as connection:
-            connection.executescript(
+            statements = (
                 """
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY,
@@ -61,6 +102,20 @@ class AuthStore:
                     ON runs(user_id, created_at DESC);
                 """
             )
+            for statement in statements.split(";"):
+                if statement.strip():
+                    self._execute(connection, statement)
+
+    def health_check(self):
+        with self._connect() as connection:
+            self._execute(connection, "SELECT 1")
+
+    def _integrity_errors(self):
+        if self._postgres:
+            import pg8000.dbapi
+
+            return (pg8000.dbapi.IntegrityError,)
+        return (sqlite3.IntegrityError,)
 
     @staticmethod
     def validate_registration(username, password):
@@ -104,7 +159,8 @@ class AuthStore:
         encoded_hash = self._password_hash(password)
         try:
             with self._connect() as connection:
-                connection.execute(
+                self._execute(
+                    connection,
                     """
                     INSERT INTO users(id, username, username_key, password_hash, created_at)
                     VALUES (?, ?, ?, ?, ?)
@@ -117,7 +173,7 @@ class AuthStore:
                         created_at,
                     ),
                 )
-        except sqlite3.IntegrityError as error:
+        except self._integrity_errors() as error:
             raise ValueError("That username is already registered.") from error
         return {"id": user_id, "username": normalized_username}
 
@@ -126,7 +182,8 @@ class AuthStore:
             return None
         username_key = username.strip().casefold()
         with self._connect() as connection:
-            row = connection.execute(
+            row = self._execute(
+                connection,
                 "SELECT id, username, password_hash FROM users WHERE username_key = ?",
                 (username_key,),
             ).fetchone()
@@ -148,8 +205,9 @@ class AuthStore:
         token_hash = hashlib.sha256(raw_token.encode("ascii")).hexdigest()
         expires_at = int(time.time()) + SESSION_TTL_SECONDS
         with self._connect() as connection:
-            connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
-            connection.execute(
+            self._execute(connection, "DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
+            self._execute(
+                connection,
                 "INSERT INTO sessions(token_hash, user_id, expires_at) VALUES (?, ?, ?)",
                 (token_hash, user_id, expires_at),
             )
@@ -161,8 +219,9 @@ class AuthStore:
         token_hash = hashlib.sha256(raw_token.encode("ascii", errors="ignore")).hexdigest()
         now = int(time.time())
         with self._connect() as connection:
-            connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
-            row = connection.execute(
+            self._execute(connection, "DELETE FROM sessions WHERE expires_at <= ?", (now,))
+            row = self._execute(
+                connection,
                 """
                 SELECT users.id, users.username
                 FROM sessions
@@ -178,13 +237,14 @@ class AuthStore:
             return
         token_hash = hashlib.sha256(raw_token.encode("ascii", errors="ignore")).hexdigest()
         with self._connect() as connection:
-            connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+            self._execute(connection, "DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
 
     def save_run(self, user_id, report, report_markdown, test_source):
         run_id = uuid.uuid4().hex
         created_at = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
-            connection.execute(
+            self._execute(
+                connection,
                 """
                 INSERT INTO runs(id, user_id, created_at, report_json, report_markdown, test_source)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -202,7 +262,8 @@ class AuthStore:
 
     def list_runs(self, user_id):
         with self._connect() as connection:
-            rows = connection.execute(
+            rows = self._execute(
+                connection,
                 """
                 SELECT id, created_at, report_json
                 FROM runs
@@ -228,7 +289,8 @@ class AuthStore:
 
     def get_run(self, user_id, run_id):
         with self._connect() as connection:
-            row = connection.execute(
+            row = self._execute(
+                connection,
                 """
                 SELECT id, created_at, report_json, report_markdown, test_source
                 FROM runs WHERE id = ? AND user_id = ?
@@ -244,3 +306,18 @@ class AuthStore:
             "report_markdown": row["report_markdown"],
             "test_source": row["test_source"],
         }
+
+
+class _MappingCursor:
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    def fetchone(self):
+        row = self.cursor.fetchone()
+        if row is None:
+            return None
+        return dict(zip((column[0] for column in self.cursor.description), row))
+
+    def fetchall(self):
+        columns = [column[0] for column in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]

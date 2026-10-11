@@ -1,6 +1,7 @@
 """Local browser dashboard for the requirement-to-test pipeline."""
 import json
 import mimetypes
+import os
 import re
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,7 +15,16 @@ from .report import to_markdown
 
 MAX_REQUEST_BYTES = 256_000
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-AUTH_STORE = AuthStore(DATA_DIR / "req2test.sqlite3")
+AUTH_STORE = AuthStore(
+    DATA_DIR / "req2test.sqlite3",
+    database_url=os.environ.get("DATABASE_URL"),
+)
+APP_ORIGINS = {
+    origin.strip().rstrip("/")
+    for origin in os.environ.get("APP_ORIGINS", "").split(",")
+    if origin.strip()
+}
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "").casefold() == "true"
 SESSION_COOKIE = "req2test_session"
 RUN_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 ALLOWED_TARGETS = {
@@ -53,6 +63,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/health":
+            try:
+                AUTH_STORE.health_check()
+            except Exception as error:
+                self._send_json(503, {"status": "unavailable", "error": str(error)})
+                return
+            self._send_json(200, {"status": "ok"})
+            return
         if path == "/api/session":
             user = self._current_user()
             self._send_json(200, {"user": user})
@@ -166,9 +184,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         if not origin:
             return
-        parsed = urlparse(origin)
-        host = self.headers.get("Host", "")
-        if parsed.scheme not in ("http", "https") or parsed.netloc.casefold() != host.casefold():
+        normalized_origin = origin.rstrip("/")
+        parsed = urlparse(normalized_origin)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("Cross-origin requests are not allowed.")
+        if APP_ORIGINS:
+            allowed = normalized_origin.casefold() in {
+                allowed_origin.casefold() for allowed_origin in APP_ORIGINS
+            }
+        else:
+            host = self.headers.get("Host", "")
+            allowed = parsed.netloc.casefold() == host.casefold()
+        if not allowed:
             raise ValueError("Cross-origin requests are not allowed.")
 
     def _session_token(self):
@@ -212,7 +239,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header(
             "Set-Cookie",
-            f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL_SECONDS}",
+            f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL_SECONDS}"
+            + ("; Secure" if COOKIE_SECURE else ""),
         )
         self.end_headers()
         self.wfile.write(content)
@@ -226,7 +254,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header(
             "Set-Cookie",
-            f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+            f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+            + ("; Secure" if COOKIE_SECURE else ""),
         )
         self.end_headers()
         self.wfile.write(content)
@@ -286,8 +315,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def serve(host="127.0.0.1", port=8000):
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        raise ValueError("The dashboard only supports localhost binding.")
+    if host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+        raise ValueError("Host must be localhost or 0.0.0.0.")
     if not 1 <= port <= 65535:
         raise ValueError("Port must be between 1 and 65535.")
     server = ThreadingHTTPServer((host, port), DashboardHandler)

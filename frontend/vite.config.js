@@ -1,14 +1,18 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
+import process from "node:process";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
+const outputDir = process.env.VERCEL
+  ? "dist"
+  : fileURLToPath(new URL("../req2test/static/", import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
   base: "/",
   build: {
-    outDir: fileURLToPath(new URL("../req2test/static/", import.meta.url)),
+    outDir: outputDir,
     emptyOutDir: true,
   },
   resolve: {

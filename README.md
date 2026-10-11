@@ -82,6 +82,34 @@ Generated output is written to `./out/`:
 
 Dashboard runs are stored per account in the local SQLite database instead of being written to the shared `out/` directory.
 
+## Public deployment (Vercel + Render + Neon)
+
+The React dashboard can be hosted on Vercel, but its Python API and persistent
+account/report database must also be deployed. The checked-in `render.yaml`
+defines the Python API service, and `frontend/vercel.json` proxies `/api/*` to
+that service so browser sessions remain same-origin.
+
+1. Create a PostgreSQL project in Neon and copy its pooled connection string.
+2. In Render, create a Blueprint from this repository using `render.yaml`.
+   Set `DATABASE_URL` to the Neon connection string and `APP_ORIGINS` to the
+   exact public Vercel origin (for example, `https://req2test.vercel.app`).
+   `COOKIE_SECURE` is enabled by the Blueprint.
+3. In Vercel, import this repository and set the project root to `frontend`.
+   Use `npm run build` as the build command and `dist` as the output directory.
+4. Deploy the Vercel project and verify `/api/health` returns `{"status":"ok"}`.
+
+The default Vercel rewrite targets
+`https://req2test-api-jayeshpandey21.onrender.com`. If Render assigns a
+different service URL, update that destination in `frontend/vercel.json` and
+redeploy the Vercel project. Add the Vercel production origin to Render's
+`APP_ORIGINS` setting, without a trailing slash. Preview deployments are not
+allowed by default; add an exact preview origin only if it is intentionally
+trusted.
+
+For local development, omit `DATABASE_URL` to keep using SQLite. When the
+`VERCEL` environment variable is set, Vite builds into `frontend/dist`;
+otherwise it builds into the Python server's `req2test/static` directory.
+
 ## Plugging in your own target system
 
 Expose a module with the following contract:
