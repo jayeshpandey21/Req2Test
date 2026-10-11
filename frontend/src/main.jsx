@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
+const STATIC_PREVIEW = import.meta.env.MODE === "static-preview";
 const EXAMPLE =
   "Users should be able to log in using their email and password. If the password is incorrect five times, the account should be temporarily locked.";
 
@@ -417,6 +418,38 @@ function LoginPage({ onAuthenticated, initialError = "" }) {
   const [busy, setBusy] = useState(false);
   const isRegister = mode === "register";
 
+  if (STATIC_PREVIEW) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-card panel">
+          <div className="brand auth-brand">
+            <div className="brand-mark">R</div>
+            <div><strong>Req2Test</strong><small>Autonomous QA pipeline</small></div>
+          </div>
+          <div className="eyebrow">Public UI preview · Vercel</div>
+          <h1>Explore the Req2Test interface.</h1>
+          <p className="auth-description">
+            This Vercel deployment contains the React interface only. The Python API and persistent
+            database are not connected, so accounts, requirement analysis, test execution, and
+            saved reports are unavailable here.
+          </p>
+          <div className="preview-status" role="status">
+            <strong>Static preview</strong>
+            <span>Nothing submitted here will be analyzed or saved.</span>
+          </div>
+          <a
+            className="primary-button preview-source-link"
+            href="https://github.com/jayeshpandey21/Req2Test"
+            target="_blank"
+            rel="noreferrer"
+          >
+            View project source on GitHub
+          </a>
+        </section>
+      </main>
+    );
+  }
+
   async function submit(event) {
     event.preventDefault();
     setError("");
@@ -603,6 +636,10 @@ function App() {
   }
 
   useEffect(() => {
+    if (STATIC_PREVIEW) {
+      setAuthReady(true);
+      return undefined;
+    }
     let active = true;
     (async () => {
       try {

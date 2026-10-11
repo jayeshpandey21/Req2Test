@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "vite build"
+    "build": "vite build",
+    "build:vercel-preview": "vite build --mode static-preview"
   },
   "dependencies": {
     "react": "^19.1.0",

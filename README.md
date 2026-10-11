@@ -82,35 +82,19 @@ Generated output is written to `./out/`:
 
 Dashboard runs are stored per account in the local SQLite database instead of being written to the shared `out/` directory.
 
-## Public deployment (Vercel + Render)
+## Vercel static preview
 
-The React dashboard can be hosted on Vercel, but its Python API and persistent
-account/report database must also be deployed. The checked-in `render.yaml`
-defines a Python API service and a Render-managed PostgreSQL database.
-`frontend/vercel.json` proxies `/api/*` to the Python service so browser
-sessions remain same-origin.
+The Vercel deployment is configured as a **static UI preview only**. In Vercel,
+import this repository and set the project root to `frontend`. The included
+`frontend/vercel.json` builds the preview into `dist`. The preview explains
+that accounts, requirement analysis, test execution, and saved reports are
+unavailable because no backend or database is deployed there. Do not enter
+credentials or expect requirements to be processed on the static preview.
 
-1. In Vercel, import this repository and set the project root to `frontend`.
-   Use `npm run build` as the build command and `dist` as the output directory.
-2. In Render, create a Blueprint from this repository using `render.yaml`.
-   Review the database plan and price shown by Render before creating resources.
-   Set `APP_ORIGINS` to the exact public Vercel origin (for example,
-   `https://req2test.vercel.app`). Render provides `DATABASE_URL` to the API;
-   `COOKIE_SECURE` is enabled by the Blueprint.
-3. Deploy the Vercel project and verify `/api/health` returns `{"status":"ok"}`.
-
-The default Vercel rewrite targets
-`https://req2test-api-jayeshpandey21.onrender.com`. If Render assigns a
-different service URL, update that destination in `frontend/vercel.json` and
-redeploy the Vercel project. Add the Vercel production origin to Render's
-`APP_ORIGINS` setting, without a trailing slash. Render's Free web service
-sleeps when idle; review its current plan limits before deploying. Preview
-deployments are not allowed by default; add an exact preview origin only if it
-is intentionally trusted.
-
-For local development, omit `DATABASE_URL` to keep using SQLite. When the
-`VERCEL` environment variable is set, Vite builds into `frontend/dist`;
-otherwise it builds into the Python server's `req2test/static` directory.
+For the fully functional local application, build with `npm --prefix frontend
+run build` (not the Vercel preview build) and start the Python dashboard with
+`python -m req2test --web`. Local accounts and reports use SQLite as described
+above.
 
 ## Plugging in your own target system
 

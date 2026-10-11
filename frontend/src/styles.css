@@ -212,6 +212,32 @@ pre { overflow: auto; max-height: 360px; padding: 12px; color: #bfd4e8; backgrou
   .flow-node { padding: 10px; }
   .flow-outcomes { grid-template-columns: 1fr; }
 }
+
+.preview-status {
+  display: grid;
+  gap: 6px;
+  margin: 22px 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 189, 105, 0.32);
+  border-radius: 12px;
+  background: rgba(255, 189, 105, 0.08);
+  color: #ffcf91;
+  font-size: 0.9rem;
+}
+
+.preview-status span {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.preview-source-link {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 46px;
+  color: inherit;
+  text-decoration: none;
+}
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   aside { display: none; }
