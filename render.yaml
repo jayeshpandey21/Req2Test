@@ -1,3 +1,8 @@
+databases:
+  - name: req2test-db
+    databaseName: req2test
+    user: req2test
+    plan: basic-256mb
 services:
   - type: web
     name: req2test-api-jayeshpandey21
@@ -10,7 +15,9 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.7
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: req2test-db
+          property: connectionString
       - key: APP_ORIGINS
         sync: false
       - key: COOKIE_SECURE
